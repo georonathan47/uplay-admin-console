@@ -1,4 +1,7 @@
 import { useState } from 'react';
+import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
+import { AuthPage } from '@/pages/AuthPage';
 import { Sidebar, type PageId } from '@/components/layout/Sidebar';
 import { Topbar } from '@/components/layout/Topbar';
 import { OverviewPage } from '@/pages/OverviewPage';
@@ -10,8 +13,21 @@ import { NotificationsPage } from '@/pages/NotificationsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 
 function App() {
+  const { session, loading } = useAuth();
   const [activePage, setActivePage] = useState<PageId>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-dark-950">
+        <Loader2 size={32} className="animate-spin text-primary-500" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthPage />;
+  }
 
   const renderPage = () => {
     switch (activePage) {

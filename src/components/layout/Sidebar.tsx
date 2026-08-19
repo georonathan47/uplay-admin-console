@@ -8,7 +8,9 @@ import {
   Settings,
   Activity,
   X,
+  LogOut,
 } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 
 export type PageId =
   | 'overview'
@@ -44,6 +46,9 @@ interface SidebarProps {
 }
 
 export function Sidebar({ active, onNavigate, open, onClose }: SidebarProps) {
+  const { user, signOut } = useAuth();
+  const initials = (user?.email ?? 'A').charAt(0).toUpperCase();
+
   return (
     <>
       {open && (
@@ -107,12 +112,21 @@ export function Sidebar({ active, onNavigate, open, onClose }: SidebarProps) {
         <div className="p-4 border-t border-dark-800">
           <div className="flex items-center gap-3 p-3 rounded-xl bg-dark-900">
             <div className="w-9 h-9 rounded-full bg-gradient-to-br from-secondary-400 to-secondary-600 flex items-center justify-center text-white font-semibold text-sm">
-              AD
+              {initials}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-dark-100 truncate">Admin</p>
-              <p className="text-xs text-dark-400 truncate">admin@youplay.com</p>
+              <p className="text-sm font-medium text-dark-100 truncate">
+                {user?.email ?? 'Admin'}
+              </p>
+              <p className="text-xs text-dark-400 truncate">Signed in</p>
             </div>
+            <button
+              onClick={() => signOut()}
+              title="Sign out"
+              className="p-2 rounded-lg text-dark-400 hover:text-error-300 hover:bg-error-500/10 transition-colors"
+            >
+              <LogOut size={18} />
+            </button>
           </div>
         </div>
       </aside>
