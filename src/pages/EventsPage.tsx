@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
-import { CalendarDays, Search, Pencil, Trash2, MapPin, Users, Lock } from 'lucide-react';
-import { deleteEvent, fetchEvents, updateEvent } from '@/lib/api/events';
+import { CalendarDays, Search, Pencil, Trash2, MapPin, Users, Lock, Plus } from 'lucide-react';
+import { createEvent, deleteEvent, fetchEvents, updateEvent } from '@/lib/api/events';
+import { fetchPeople } from '@/lib/api/profiles';
+import { useAuth } from '@/lib/auth';
 import { useLiveQuery } from '@/lib/useLiveQuery';
 import { formatDate, humanise } from '@/lib/format';
-import type { EventEditable, EventItem, EventStatus } from '@/lib/types';
+import type { EventEditable, EventItem, EventStatus, Person } from '@/lib/types';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
@@ -31,13 +33,19 @@ function fromLocalInput(value: string): string | null {
 export function EventsPage() {
   const fetcher = useCallback(() => fetchEvents(), []);
   const { data, loading, error, refetch } = useLiveQuery(fetcher, ['events']);
+  const { user } = useAuth();
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<EventItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Only the create form needs the full list of profiles, so it is fetched on
+  // first use rather than on every visit to the page.
+  const [organizers, setOrganizers] = useState<Person[] | null>(null);
 
   const events = useMemo(() => data ?? [], [data]);
 
@@ -53,6 +61,34 @@ export function EventsPage() {
       return matchesSearch && matchesStatus;
     });
   }, [events, search, statusFilter]);
+
+  async function openCreate() {
+    setCreating(true);
+    setActionError(null);
+    if (organizers) return;
+
+    try {
+      setOrganizers(await fetchPeople());
+    } catch {
+      // Not fatal — the picker falls back to attributing the event to the
+      // signed-in admin, which the platform's own policy already allows.
+      setOrganizers([]);
+    }
+  }
+
+  async function handleCreate(form: EventEditable, organizerId: string) {
+    setSaving(true);
+    setActionError(null);
+    try {
+      await createEvent({ ...form, created_by: organizerId });
+      setCreating(false);
+      await refetch();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to create event');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleSave(patch: EventEditable) {
     if (!editing) return;
@@ -92,6 +128,11 @@ export function EventsPage() {
       <PageHeader
         title="Events"
         description={`${events.length} ${events.length === 1 ? 'event' : 'events'} on the platform`}
+        actions={
+          <button onClick={openCreate} className="btn-primary">
+            <Plus size={16} /> Create event
+          </button>
+        }
       />
 
       {actionError && (
@@ -196,12 +237,26 @@ export function EventsPage() {
         </div>
       )}
 
+      {creating && (
+        <EventFormModal
+          mode="create"
+          organizers={organizers}
+          defaultOrganizerId={user?.id ?? ''}
+          saving={saving}
+          onClose={() => setCreating(false)}
+          onSubmit={handleCreate}
+        />
+      )}
+
       {editing && (
-        <EditEventModal
+        <EventFormModal
+          mode="edit"
           event={editing}
+          organizers={organizers}
+          defaultOrganizerId={user?.id ?? ''}
           saving={saving}
           onClose={() => setEditing(null)}
-          onSave={handleSave}
+          onSubmit={handleSave}
         />
       )}
 
@@ -228,32 +283,60 @@ export function EventsPage() {
   );
 }
 
-interface EditEventModalProps {
-  event: EventItem;
+interface EventFormModalProps {
+  mode: 'create' | 'edit';
+  /** Required in edit mode; the form starts blank without it. */
+  event?: EventItem;
+  /** Null while still loading. Only read in create mode. */
+  organizers: Person[] | null;
+  defaultOrganizerId: string;
   saving: boolean;
   onClose: () => void;
-  onSave: (patch: EventEditable) => void;
+  onSubmit: (form: EventEditable, organizerId: string) => void;
 }
 
-function EditEventModal({ event, saving, onClose, onSave }: EditEventModalProps) {
+/**
+ * Create and edit take the same fields, so they share one form. The only
+ * difference is the organizer picker: `created_by` is fixed once a row exists,
+ * and reassigning it is not something the console offers.
+ */
+function EventFormModal({
+  mode,
+  event,
+  organizers,
+  defaultOrganizerId,
+  saving,
+  onClose,
+  onSubmit,
+}: EventFormModalProps) {
   const [form, setForm] = useState<EventEditable>({
-    title: event.title,
-    description: event.description,
-    sport: event.sport,
-    location: event.location,
-    start_date: event.startDate,
-    end_date: event.endDate,
-    max_participants: event.capacity,
-    is_draft: event.isDraft,
-    is_application_closed: event.isApplicationClosed,
+    title: event?.title ?? '',
+    description: event?.description ?? null,
+    sport: event?.sport ?? null,
+    location: event?.location ?? null,
+    start_date: event?.startDate ?? null,
+    end_date: event?.endDate ?? null,
+    max_participants: event?.capacity ?? null,
+    // A new event starts hidden so it is not live the moment it is saved.
+    is_draft: event?.isDraft ?? true,
+    is_application_closed: event?.isApplicationClosed ?? false,
   });
+  const [organizerId, setOrganizerId] = useState(event?.organizer?.id ?? defaultOrganizerId);
+
+  const creating = mode === 'create';
 
   return (
-    <Modal open onClose={onClose} title="Edit event" description={event.title} size="lg">
+    <Modal
+      open
+      onClose={onClose}
+      title={creating ? 'Create event' : 'Edit event'}
+      description={creating ? 'Saved as a draft unless you publish it below.' : event?.title}
+      size="lg"
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(form);
+          onSubmit(form, organizerId);
         }}
         className="space-y-4"
       >
@@ -278,6 +361,34 @@ function EditEventModal({ event, saving, onClose, onSave }: EditEventModalProps)
             className="input-field resize-none"
           />
         </div>
+
+        {creating && (
+          <div>
+            <label className="label-field" htmlFor="organizer">Organizer</label>
+            <select
+              id="organizer"
+              value={organizerId}
+              onChange={(e) => setOrganizerId(e.target.value)}
+              disabled={!organizers}
+              className="input-field disabled:opacity-50"
+            >
+              {/* Kept selectable while the list loads so the form is never blocked. */}
+              <option value={defaultOrganizerId}>
+                {organizers ? 'You' : 'Loading people...'}
+              </option>
+              {(organizers ?? [])
+                .filter((person) => person.id !== defaultOrganizerId)
+                .map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.name} — {person.email}
+                  </option>
+                ))}
+            </select>
+            <p className="text-xs text-dark-500 mt-1.5">
+              Who the event belongs to. They can manage it from the UPlay app.
+            </p>
+          </div>
+        )}
 
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
@@ -362,7 +473,7 @@ function EditEventModal({ event, saving, onClose, onSave }: EditEventModalProps)
             Cancel
           </button>
           <button type="submit" disabled={saving} className="btn-primary disabled:opacity-50">
-            {saving ? 'Saving...' : 'Save changes'}
+            {saving ? 'Saving...' : creating ? 'Create event' : 'Save changes'}
           </button>
         </div>
       </form>

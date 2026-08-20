@@ -5,7 +5,9 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  // `supabase/functions` runs on Deno, not in a browser — different globals and a
+  // different module resolver, so linting it with this config only produces noise.
+  { ignores: ['dist', 'supabase'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

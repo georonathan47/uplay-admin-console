@@ -1,6 +1,13 @@
 import { supabase } from '@/lib/supabase';
 import { toPersonRef } from '@/lib/api/profiles';
-import type { EventEditable, EventItem, EventRow, EventStatus, ProfileRow } from '@/lib/types';
+import type {
+  EventCreatable,
+  EventEditable,
+  EventItem,
+  EventRow,
+  EventStatus,
+  ProfileRow,
+} from '@/lib/types';
 
 /**
  * `organizer` is embedded via the events_created_by_fkey relationship. The
@@ -80,6 +87,23 @@ export async function fetchUpcomingEvents(limit: number): Promise<EventItem[]> {
 
   if (error) throw error;
   return (data as unknown as EventRowWithOrganizer[]).map(toEventItem);
+}
+
+/**
+ * Two policies permit this: the platform's own "Event managers can insert events"
+ * (which requires `created_by = auth.uid()`) and the console's additive
+ * "UPlay admins can insert any event", which is what makes the organizer picker
+ * work. `.select('id')` is chained on for the same reason as the writes below.
+ */
+export async function createEvent(input: EventCreatable): Promise<string> {
+  const { data, error } = await supabase.from('events').insert(input).select('id');
+
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('Create was blocked — this account may not have admin rights.');
+  }
+
+  return data[0].id;
 }
 
 export async function updateEvent(id: string, patch: Partial<EventEditable>): Promise<void> {

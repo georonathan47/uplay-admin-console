@@ -1,5 +1,12 @@
 import { supabase } from '@/lib/supabase';
-import type { Person, PersonRef, PersonStatus, ProfileRow } from '@/lib/types';
+import type {
+  InviteResult,
+  NewPersonInput,
+  Person,
+  PersonRef,
+  PersonStatus,
+  ProfileRow,
+} from '@/lib/types';
 
 /** Columns the console reads. Kept explicit so a schema change fails loudly. */
 const PROFILE_COLUMNS =
@@ -99,6 +106,44 @@ export function setVerified(id: string, isVerified: boolean): Promise<void> {
 
 export function setSuspended(id: string, suspended: boolean): Promise<void> {
   return updateProfile(id, { suspended_at: suspended ? new Date().toISOString() : null });
+}
+
+/**
+ * `functions.invoke` collapses every non-2xx into "non-2xx status code", which
+ * tells an admin nothing. The function's own message is in the response body and
+ * is usually actionable — "Athletes must be invited by an organization first",
+ * for instance — so it is dug out here.
+ */
+async function readFunctionError(error: unknown): Promise<string> {
+  const context = (error as { context?: unknown }).context;
+
+  if (context instanceof Response) {
+    try {
+      const body = (await context.json()) as { error?: unknown };
+      if (typeof body?.error === 'string') return body.error;
+    } catch {
+      // Not JSON — fall through to the generic message.
+    }
+  }
+
+  return error instanceof Error ? error.message : 'Could not reach the invite service.';
+}
+
+/**
+ * Creating a person cannot happen from the browser: `profiles.id` is a foreign
+ * key to `auth.users(id)` and only the account holder may insert their own row,
+ * so an auth user has to exist first. The `admin-invite-person` edge function
+ * does that with the service role key and re-checks `is_uplay_admin` itself.
+ */
+export async function invitePerson(input: NewPersonInput): Promise<InviteResult> {
+  const { data, error } = await supabase.functions.invoke<InviteResult>('admin-invite-person', {
+    body: input,
+  });
+
+  if (error) throw new Error(await readFunctionError(error));
+  if (!data) throw new Error('The invite service returned an empty response.');
+
+  return data;
 }
 
 /** Used by the Account page for the signed-in admin's own row. */

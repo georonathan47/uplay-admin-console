@@ -153,6 +153,34 @@ export interface PersonRef {
  */
 export type PersonStatus = 'active' | 'pending' | 'suspended';
 
+/**
+ * Everything the console may specify when inviting someone. This mirrors the
+ * allowlist in the `admin-invite-person` edge function — note the absence of
+ * `is_uplay_admin` and `is_verified`, which that function refuses to accept so
+ * the console cannot grant itself or anyone else admin rights.
+ */
+export interface NewPersonInput {
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  user_type: string | null;
+  sport: string | null;
+  gender: string | null;
+  phone: string | null;
+  country_code: string | null;
+}
+
+export interface InviteResult {
+  /** False when the account exists but the invite email could not be sent. */
+  invited: boolean;
+  userId: string | null;
+  email: string;
+  /** Present only when `invited` is false — hand this to the person directly. */
+  actionLink: string | null;
+  /** Why the email did not send, or a non-fatal problem worth showing. */
+  reason: string | null;
+}
+
 export interface Person extends PersonRef {
   email: string;
   phone: string | null;
@@ -203,6 +231,14 @@ export interface EventEditable {
   max_participants: number | null;
   is_draft: boolean;
   is_application_closed: boolean;
+}
+
+/**
+ * Creating additionally sets the organizer. `created_by` is a foreign key to
+ * `profiles(id)`, so it can only ever be someone who already has an account.
+ */
+export interface EventCreatable extends EventEditable {
+  created_by: string;
 }
 
 export interface ConnectionItem {

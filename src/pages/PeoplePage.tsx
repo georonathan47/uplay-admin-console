@@ -8,14 +8,20 @@ import {
   Mail,
   Phone,
   Shield,
+  UserPlus,
+  Copy,
+  Check,
+  TriangleAlert,
+  Send,
 } from 'lucide-react';
-import { fetchPeople, setSuspended, setVerified } from '@/lib/api/profiles';
+import { fetchPeople, invitePerson, setSuspended, setVerified } from '@/lib/api/profiles';
 import { useLiveQuery } from '@/lib/useLiveQuery';
 import { formatDate, humanise } from '@/lib/format';
-import type { Person, PersonStatus } from '@/lib/types';
+import type { InviteResult, NewPersonInput, Person, PersonStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Avatar } from '@/components/ui/Avatar';
+import { Modal } from '@/components/ui/Modal';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/States';
 
 const STATUS_VARIANT: Record<PersonStatus, 'success' | 'warning' | 'error'> = {
@@ -33,6 +39,7 @@ export function PeoplePage() {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [inviting, setInviting] = useState(false);
 
   const people = useMemo(() => data ?? [], [data]);
 
@@ -78,6 +85,11 @@ export function PeoplePage() {
       <PageHeader
         title="People"
         description={`${people.length} ${people.length === 1 ? 'person' : 'people'} on the platform`}
+        actions={
+          <button onClick={() => setInviting(true)} className="btn-primary">
+            <UserPlus size={16} /> Invite person
+          </button>
+        }
       />
 
       {actionError && (
@@ -147,6 +159,256 @@ export function PeoplePage() {
           ))}
         </div>
       )}
+
+      {inviting && <InvitePersonModal onClose={() => setInviting(false)} onInvited={refetch} />}
+    </div>
+  );
+}
+
+/**
+ * `athlete` is deliberately absent. A BEFORE INSERT trigger on `profiles`
+ * (`validate_athlete_registration`) rejects an athlete unless an organization has
+ * already invited that address, and the console has no organizations view — so
+ * offering it here would only ever produce an error.
+ */
+const USER_TYPE_OPTIONS = [
+  { value: 'coach_scout', label: 'Coach / Scout' },
+  { value: 'org_admin', label: 'Organization admin' },
+];
+
+const EMPTY_INVITE: NewPersonInput = {
+  email: '',
+  first_name: null,
+  last_name: null,
+  user_type: 'coach_scout',
+  sport: null,
+  gender: null,
+  phone: null,
+  // Matches the column default on profiles.country_code.
+  country_code: '+233',
+};
+
+interface InvitePersonModalProps {
+  onClose: () => void;
+  onInvited: () => void;
+}
+
+function InvitePersonModal({ onClose, onInvited }: InvitePersonModalProps) {
+  const [form, setForm] = useState<NewPersonInput>(EMPTY_INVITE);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<InviteResult | null>(null);
+
+  /** Every optional field stores null rather than '' so nothing blank is written. */
+  function set(field: keyof NewPersonInput, value: string) {
+    setForm((current) => ({ ...current, [field]: value || null }));
+  }
+
+  async function handleSubmit() {
+    setSending(true);
+    setError(null);
+    try {
+      setResult(await invitePerson(form));
+      // The row already exists at this point, so the list can be refreshed while
+      // the admin is still reading the result.
+      onInvited();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send the invite');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (result) {
+    return (
+      <Modal open onClose={onClose} title="Invite sent" description={result.email} size="md">
+        <InviteOutcome result={result} onClose={onClose} />
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Invite person"
+      description="They receive an email invitation and set their own password."
+      size="lg"
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSubmit();
+        }}
+        className="space-y-4"
+      >
+        {error && (
+          <div className="p-3 rounded-xl bg-error-500/10 border border-error-500/20 text-error-300 text-sm">
+            {error}
+          </div>
+        )}
+
+        <div>
+          <label className="label-field" htmlFor="invite-email">Email address</label>
+          <input
+            id="invite-email"
+            type="email"
+            required
+            autoFocus
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="name@example.com"
+            className="input-field"
+          />
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label-field" htmlFor="invite-first">First name</label>
+            <input
+              id="invite-first"
+              value={form.first_name ?? ''}
+              onChange={(e) => set('first_name', e.target.value)}
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="label-field" htmlFor="invite-last">Last name</label>
+            <input
+              id="invite-last"
+              value={form.last_name ?? ''}
+              onChange={(e) => set('last_name', e.target.value)}
+              className="input-field"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="label-field" htmlFor="invite-type">Account type</label>
+          <select
+            id="invite-type"
+            value={form.user_type ?? ''}
+            onChange={(e) => set('user_type', e.target.value)}
+            className="input-field"
+          >
+            {USER_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-dark-500 mt-1.5">
+            Athletes can't be invited here — they join through an organization's invitation.
+          </p>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className="label-field" htmlFor="invite-sport">Sport</label>
+            <input
+              id="invite-sport"
+              value={form.sport ?? ''}
+              onChange={(e) => set('sport', e.target.value)}
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="label-field" htmlFor="invite-gender">Gender</label>
+            <select
+              id="invite-gender"
+              value={form.gender ?? ''}
+              onChange={(e) => set('gender', e.target.value)}
+              className="input-field"
+            >
+              <option value="">Not specified</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="label-field" htmlFor="invite-country">Country code</label>
+            <input
+              id="invite-country"
+              value={form.country_code ?? ''}
+              onChange={(e) => set('country_code', e.target.value)}
+              placeholder="+233"
+              className="input-field"
+            />
+          </div>
+          <div>
+            <label className="label-field" htmlFor="invite-phone">Phone</label>
+            <input
+              id="invite-phone"
+              value={form.phone ?? ''}
+              onChange={(e) => set('phone', e.target.value)}
+              className="input-field"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4">
+          <button type="button" onClick={onClose} className="btn-secondary">
+            Cancel
+          </button>
+          <button type="submit" disabled={sending} className="btn-primary disabled:opacity-50">
+            <Send size={15} />
+            {sending ? 'Sending...' : 'Send invite'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/**
+ * The account exists either way. What differs is whether the person can be
+ * reached — if the mail didn't go out, the link has to be handed over manually,
+ * so it is shown rather than hidden behind a retry.
+ */
+function InviteOutcome({ result, onClose }: { result: InviteResult; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyLink() {
+    if (!result.actionLink) return;
+    await navigator.clipboard.writeText(result.actionLink);
+    setCopied(true);
+  }
+
+  return (
+    <div className="space-y-4">
+      {result.invited ? (
+        <p className="text-sm text-dark-200">
+          The account is created and an invitation email is on its way. They'll set their own
+          password from the link in it.
+        </p>
+      ) : (
+        <>
+          <div className="p-3 rounded-xl bg-warning-500/10 border border-warning-500/20 text-warning-300 text-sm flex gap-2.5">
+            <TriangleAlert size={16} className="flex-shrink-0 mt-0.5" />
+            <span>
+              The account was created, but the invitation email could not be sent. Send them this
+              link yourself — it lets them set a password.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input readOnly value={result.actionLink ?? ''} className="input-field font-mono text-xs" />
+            <button onClick={copyLink} className="btn-secondary flex-shrink-0">
+              {copied ? <Check size={15} /> : <Copy size={15} />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {result.reason && <p className="text-xs text-dark-500">Details: {result.reason}</p>}
+
+      <div className="flex justify-end pt-2">
+        <button onClick={onClose} className="btn-primary">
+          Done
+        </button>
+      </div>
     </div>
   );
 }
