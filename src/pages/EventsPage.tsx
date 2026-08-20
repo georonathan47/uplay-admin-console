@@ -1,502 +1,368 @@
-import { useCallback, useEffect, useState } from 'react';
-import {
-  CalendarDays,
-  Plus,
-  Search,
-  Pencil,
-  Trash2,
-  MapPin,
-  Users,
-  Filter,
-  Clock,
-} from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import { type Event, type EventInsert, type EventUpdate, type EventStatus } from '@/lib/types';
+import { useCallback, useMemo, useState } from 'react';
+import { CalendarDays, Search, Pencil, Trash2, MapPin, Users, Lock } from 'lucide-react';
+import { deleteEvent, fetchEvents, updateEvent } from '@/lib/api/events';
+import { useLiveQuery } from '@/lib/useLiveQuery';
+import { formatDate, humanise } from '@/lib/format';
+import type { EventEditable, EventItem, EventStatus } from '@/lib/types';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/States';
 
-const SPORTS = ['Football', 'Basketball', 'Tennis', 'Swimming', 'Athletics', 'Volleyball', 'Boxing', 'Rugby', 'Hockey', 'General'];
-const STATUSES: EventStatus[] = ['upcoming', 'ongoing', 'completed', 'cancelled'];
-
-const statusVariant = (status: string): 'primary' | 'success' | 'neutral' | 'error' => {
-  const map: Record<string, 'primary' | 'success' | 'neutral' | 'error'> = {
-    upcoming: 'primary',
-    ongoing: 'success',
-    completed: 'neutral',
-    cancelled: 'error',
-  };
-  return map[status] || 'neutral';
+const STATUS_VARIANT: Record<EventStatus, 'primary' | 'success' | 'neutral' | 'warning'> = {
+  draft: 'neutral',
+  upcoming: 'primary',
+  ongoing: 'success',
+  completed: 'neutral',
 };
 
+/** `datetime-local` inputs need `YYYY-MM-DDTHH:mm`, not a full ISO string. */
+function toLocalInput(value: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function fromLocalInput(value: string): string | null {
+  return value ? new Date(value).toISOString() : null;
+}
+
 export function EventsPage() {
-  const [events, setEvents] = useState<Event[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const fetcher = useCallback(() => fetchEvents(), []);
+  const { data, loading, error, refetch } = useLiveQuery(fetcher, ['events']);
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EventItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EventItem | null>(null);
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const loadEvents = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const { data, error: err } = await supabase
-        .from('events')
-        .select('*')
-        .order('start_date', { ascending: true });
-      if (err) throw err;
-      setEvents(data || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load events');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const events = useMemo(() => data ?? [], [data]);
 
-  useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return events.filter((event) => {
+      const matchesSearch =
+        !term ||
+        event.title.toLowerCase().includes(term) ||
+        (event.location?.toLowerCase().includes(term) ?? false) ||
+        (event.sport?.toLowerCase().includes(term) ?? false);
+      const matchesStatus = statusFilter === 'all' || event.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    });
+  }, [events, search, statusFilter]);
 
-  const filtered = events.filter((e) => {
-    const matchesSearch =
-      e.title.toLowerCase().includes(search.toLowerCase()) ||
-      e.location?.toLowerCase().includes(search.toLowerCase()) ||
-      e.sport.toLowerCase().includes(search.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || e.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
-
-  const openCreate = () => {
-    setEditingEvent(null);
-    setModalOpen(true);
-  };
-
-  const openEdit = (event: Event) => {
-    setEditingEvent(event);
-    setModalOpen(true);
-  };
-
-  const handleSave = async (formData: EventInsert | EventUpdate) => {
+  async function handleSave(patch: EventEditable) {
+    if (!editing) return;
     setSaving(true);
+    setActionError(null);
     try {
-      if (editingEvent) {
-        const { error: err } = await supabase
-          .from('events')
-          .update({ ...formData, updated_at: new Date().toISOString() })
-          .eq('id', editingEvent.id);
-        if (err) throw err;
-      } else {
-        const { error: err } = await supabase.from('events').insert(formData as EventInsert);
-        if (err) throw err;
-      }
-      setModalOpen(false);
-      await loadEvents();
+      await updateEvent(editing.id, patch);
+      setEditing(null);
+      await refetch();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save event');
+      setActionError(err instanceof Error ? err.message : 'Failed to save event');
     } finally {
       setSaving(false);
     }
-  };
+  }
 
-  const handleDelete = async () => {
-    if (!deleteId) return;
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setSaving(true);
+    setActionError(null);
     try {
-      const { error: err } = await supabase.from('events').delete().eq('id', deleteId);
-      if (err) throw err;
-      setDeleteId(null);
-      await loadEvents();
+      await deleteEvent(deleteTarget.id);
+      setDeleteTarget(null);
+      await refetch();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete event');
+      setActionError(err instanceof Error ? err.message : 'Failed to delete event');
+    } finally {
+      setSaving(false);
     }
-  };
+  }
 
-  const handleStatusChange = async (event: Event, newStatus: EventStatus) => {
-    try {
-      const { error: err } = await supabase
-        .from('events')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', event.id);
-      if (err) throw err;
-      await loadEvents();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update status');
-    }
-  };
-
-  const formatDate = (date: string) => new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const formatTime = (date: string) => new Date(date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  if (loading) return <LoadingState label="Loading events..." />;
+  if (error) return <ErrorState message={error} onRetry={refetch} />;
 
   return (
     <div>
       <PageHeader
         title="Events"
-        description={`${events.length} events · ${events.filter((e) => e.status === 'upcoming').length} upcoming`}
-        actions={
-          <button onClick={openCreate} className="btn-primary">
-            <Plus size={18} /> Create Event
-          </button>
-        }
+        description={`${events.length} ${events.length === 1 ? 'event' : 'events'} on the platform`}
       />
 
-      {error && (
-        <div className="mb-4 p-4 rounded-xl bg-error-500/10 border border-error-500/30 flex items-center justify-between">
-          <p className="text-sm text-error-300">{error}</p>
-          <button onClick={() => setError(null)} className="text-error-400 hover:text-error-300 text-sm">Dismiss</button>
+      {actionError && (
+        <div className="mb-4 p-3 rounded-xl bg-error-500/10 border border-error-500/20 text-error-300 text-sm">
+          {actionError}
         </div>
       )}
 
-      <div className="card p-4 mb-6">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex-1 flex items-center gap-2 bg-dark-800 border border-dark-700 rounded-xl px-3 py-2.5">
-            <Search size={18} className="text-dark-400" />
-            <input
-              type="text"
-              placeholder="Search events..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="bg-transparent text-sm text-dark-100 placeholder-dark-400 focus:outline-none flex-1"
-            />
-          </div>
-          <div className="flex items-center gap-2 bg-dark-800 border border-dark-700 rounded-xl px-3 py-2.5">
-            <Filter size={16} className="text-dark-400" />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-transparent text-sm text-dark-100 focus:outline-none cursor-pointer"
-            >
-              <option value="all" className="bg-dark-900">All Status</option>
-              {STATUSES.map((s) => (
-                <option key={s} value={s} className="bg-dark-900 capitalize">{s}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <LoadingState label="Loading events..." />
-      ) : error && events.length === 0 ? (
-        <ErrorState message={error} onRetry={loadEvents} />
-      ) : filtered.length === 0 ? (
-        <div className="card">
-          <EmptyState
-            icon={<CalendarDays size={28} />}
-            title="No events found"
-            description="Create a new sporting event"
-            action={
-              <button onClick={openCreate} className="btn-primary">
-                <Plus size={18} /> Create Event
-              </button>
-            }
+      <div className="card p-4 mb-6 flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by title, location or sport"
+            className="input-field pl-11"
           />
         </div>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className="input-field sm:w-44"
+        >
+          <option value="all">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="upcoming">Upcoming</option>
+          <option value="ongoing">Ongoing</option>
+          <option value="completed">Completed</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState
+          icon={<CalendarDays size={28} />}
+          title="No events match"
+          description={
+            events.length === 0
+              ? 'No events exist in this project yet.'
+              : 'Try clearing the search or filters.'
+          }
+        />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((event) => {
-            const fillPct = Math.min(100, Math.round((event.registered_count / event.capacity) * 100));
-            return (
-              <div key={event.id} className="card overflow-hidden hover:border-dark-700 transition-all duration-300 group">
-                <div className="h-2 bg-gradient-to-r from-primary-500 to-secondary-500" />
-                <div className="p-5">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-white text-lg leading-tight">{event.title}</h3>
-                      <p className="text-sm text-dark-400 mt-1">{event.sport}</p>
-                    </div>
-                    <Badge variant={statusVariant(event.status)}>{event.status}</Badge>
-                  </div>
-
-                  {event.description && (
-                    <p className="text-sm text-dark-300 mb-4 line-clamp-2">{event.description}</p>
-                  )}
-
-                  <div className="space-y-2 mb-4">
-                    <div className="flex items-center gap-2 text-sm text-dark-300">
-                      <CalendarDays size={14} className="text-dark-500" />
-                      <span>{formatDate(event.start_date)}</span>
-                      <Clock size={12} className="text-dark-500 ml-1" />
-                      <span className="text-dark-400">{formatTime(event.start_date)}</span>
-                    </div>
-                    {event.location && (
-                      <div className="flex items-center gap-2 text-sm text-dark-300">
-                        <MapPin size={14} className="text-dark-500" />
-                        <span>{event.location}</span>
-                      </div>
-                    )}
-                    {event.organizer && (
-                      <div className="flex items-center gap-2 text-sm text-dark-300">
-                        <Users size={14} className="text-dark-500" />
-                        <span>{event.organizer}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs text-dark-400">Registration</span>
-                      <span className="text-xs font-medium text-dark-200">
-                        {event.registered_count}/{event.capacity}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-dark-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-700 ${
-                          fillPct >= 90 ? 'bg-error-500' : fillPct >= 60 ? 'bg-warning-500' : 'bg-primary-500'
-                        }`}
-                        style={{ width: `${fillPct}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 pt-4 border-t border-dark-800">
-                    <select
-                      value={event.status}
-                      onChange={(e) => handleStatusChange(event, e.target.value as EventStatus)}
-                      className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-2.5 py-1.5 text-xs text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500/50 cursor-pointer"
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s} className="bg-dark-900 capitalize">{s}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => openEdit(event)}
-                      className="p-2 rounded-lg bg-dark-800 hover:bg-dark-700 text-dark-300 hover:text-primary-400 transition-colors"
-                    >
-                      <Pencil size={16} />
-                    </button>
-                    <button
-                      onClick={() => setDeleteId(event.id)}
-                      className="p-2 rounded-lg bg-dark-800 hover:bg-error-500/20 text-dark-300 hover:text-error-400 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          {filtered.map((event) => (
+            <article key={event.id} className="card p-5 hover:border-dark-700 transition-colors">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-display font-semibold text-dark-100 truncate">{event.title}</h3>
+                  <p className="text-xs text-dark-400 mt-1">
+                    {formatDate(event.startDate)}
+                    {event.endDate && ` — ${formatDate(event.endDate)}`}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => setEditing(event)}
+                    className="btn-ghost p-2"
+                    aria-label={`Edit ${event.title}`}
+                  >
+                    <Pencil size={15} />
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(event)}
+                    className="btn-ghost p-2 text-error-400 hover:text-error-300"
+                    aria-label={`Delete ${event.title}`}
+                  >
+                    <Trash2 size={15} />
+                  </button>
                 </div>
               </div>
-            );
-          })}
+
+              {event.description && (
+                <p className="text-sm text-dark-400 mt-3 line-clamp-2">{event.description}</p>
+              )}
+
+              <div className="flex items-center gap-2 mt-4 flex-wrap">
+                <Badge variant={STATUS_VARIANT[event.status]}>{humanise(event.status)}</Badge>
+                {event.isApplicationClosed && (
+                  <Badge variant="warning">
+                    <Lock size={11} /> Applications closed
+                  </Badge>
+                )}
+                {event.sport && <Badge variant="secondary">{event.sport}</Badge>}
+              </div>
+
+              <div className="flex items-center gap-4 mt-4 pt-4 border-t border-dark-800 text-xs text-dark-400 flex-wrap">
+                {event.location && (
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <MapPin size={13} className="flex-shrink-0" />
+                    <span className="truncate">{event.location}</span>
+                  </span>
+                )}
+                {event.capacity !== null && (
+                  <span className="flex items-center gap-1.5">
+                    <Users size={13} /> Max {event.capacity}
+                  </span>
+                )}
+                {event.organizer && <span className="truncate">By {event.organizer.name}</span>}
+              </div>
+            </article>
+          ))}
         </div>
       )}
 
-      <EventFormModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        event={editingEvent}
-        onSave={handleSave}
-        saving={saving}
-      />
+      {editing && (
+        <EditEventModal
+          event={editing}
+          saving={saving}
+          onClose={() => setEditing(null)}
+          onSave={handleSave}
+        />
+      )}
 
       <Modal
-        open={!!deleteId}
-        onClose={() => setDeleteId(null)}
-        title="Delete Event"
-        description="This action cannot be undone."
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete event"
+        description="This permanently removes the event for everyone. It cannot be undone."
         size="sm"
       >
-        <p className="text-sm text-dark-300 mb-6">
-          Are you sure you want to delete this event? All registrations will also be removed.
+        <p className="text-sm text-dark-300">
+          Delete <span className="font-medium text-dark-100">{deleteTarget?.title}</span>?
         </p>
-        <div className="flex gap-3 justify-end">
-          <button onClick={() => setDeleteId(null)} className="btn-secondary">Cancel</button>
-          <button onClick={handleDelete} className="btn-danger">Delete</button>
+        <div className="flex justify-end gap-3 mt-6">
+          <button onClick={() => setDeleteTarget(null)} className="btn-secondary">
+            Cancel
+          </button>
+          <button onClick={handleDelete} disabled={saving} className="btn-danger disabled:opacity-50">
+            {saving ? 'Deleting...' : 'Delete'}
+          </button>
         </div>
       </Modal>
     </div>
   );
 }
 
-interface EventFormModalProps {
-  open: boolean;
-  onClose: () => void;
-  event: Event | null;
-  onSave: (data: EventInsert | EventUpdate) => void;
+interface EditEventModalProps {
+  event: EventItem;
   saving: boolean;
+  onClose: () => void;
+  onSave: (patch: EventEditable) => void;
 }
 
-function EventFormModal({ open, onClose, event, onSave, saving }: EventFormModalProps) {
-  const [form, setForm] = useState<EventInsert>({
-    title: '',
-    description: '',
-    sport: 'General',
-    location: '',
-    venue: '',
-    start_date: new Date().toISOString().slice(0, 16),
-    end_date: '',
-    capacity: 100,
-    registered_count: 0,
-    status: 'upcoming',
-    image_url: '',
-    organizer: '',
+function EditEventModal({ event, saving, onClose, onSave }: EditEventModalProps) {
+  const [form, setForm] = useState<EventEditable>({
+    title: event.title,
+    description: event.description,
+    sport: event.sport,
+    location: event.location,
+    start_date: event.startDate,
+    end_date: event.endDate,
+    max_participants: event.capacity,
+    is_draft: event.isDraft,
+    is_application_closed: event.isApplicationClosed,
   });
 
-  useEffect(() => {
-    if (event) {
-      setForm({
-        title: event.title,
-        description: event.description || '',
-        sport: event.sport,
-        location: event.location || '',
-        venue: event.venue || '',
-        start_date: new Date(event.start_date).toISOString().slice(0, 16),
-        end_date: event.end_date ? new Date(event.end_date).toISOString().slice(0, 16) : '',
-        capacity: event.capacity,
-        registered_count: event.registered_count,
-        status: event.status,
-        image_url: event.image_url || '',
-        organizer: event.organizer || '',
-      });
-    } else {
-      setForm({
-        title: '',
-        description: '',
-        sport: 'General',
-        location: '',
-        venue: '',
-        start_date: new Date().toISOString().slice(0, 16),
-        end_date: '',
-        capacity: 100,
-        registered_count: 0,
-        status: 'upcoming',
-        image_url: '',
-        organizer: '',
-      });
-    }
-  }, [event, open]);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const payload: EventInsert = {
-      ...form,
-      start_date: new Date(form.start_date).toISOString(),
-      end_date: form.end_date ? new Date(form.end_date).toISOString() : null,
-    };
-    onSave(payload);
-  };
-
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={event ? 'Edit Event' : 'Create New Event'}
-      description={event ? 'Update event details' : 'Set up a new sporting event'}
-      size="lg"
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <Modal open onClose={onClose} title="Edit event" description={event.title} size="lg">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(form);
+        }}
+        className="space-y-4"
+      >
         <div>
-          <label className="label-field">Event Title *</label>
+          <label className="label-field" htmlFor="title">Title</label>
           <input
-            type="text"
+            id="title"
             required
             value={form.title}
             onChange={(e) => setForm({ ...form, title: e.target.value })}
             className="input-field"
-            placeholder="Summer Championship 2026"
           />
         </div>
+
         <div>
-          <label className="label-field">Description</label>
+          <label className="label-field" htmlFor="description">Description</label>
           <textarea
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            className="input-field min-h-[80px] resize-y"
-            placeholder="Event description..."
+            id="description"
+            rows={3}
+            value={form.description ?? ''}
+            onChange={(e) => setForm({ ...form, description: e.target.value || null })}
+            className="input-field resize-none"
           />
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        <div className="grid sm:grid-cols-2 gap-4">
           <div>
-            <label className="label-field">Sport *</label>
-            <select
-              value={form.sport}
-              onChange={(e) => setForm({ ...form, sport: e.target.value })}
-              className="input-field cursor-pointer"
-            >
-              {SPORTS.map((s) => (
-                <option key={s} value={s} className="bg-dark-900">{s}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label-field">Status</label>
-            <select
-              value={form.status}
-              onChange={(e) => setForm({ ...form, status: e.target.value as EventStatus })}
-              className="input-field cursor-pointer capitalize"
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s} className="bg-dark-900 capitalize">{s}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label-field">Location</label>
+            <label className="label-field" htmlFor="sport">Sport</label>
             <input
-              type="text"
-              value={form.location}
-              onChange={(e) => setForm({ ...form, location: e.target.value })}
+              id="sport"
+              value={form.sport ?? ''}
+              onChange={(e) => setForm({ ...form, sport: e.target.value || null })}
               className="input-field"
-              placeholder="London, UK"
             />
           </div>
           <div>
-            <label className="label-field">Venue</label>
+            <label className="label-field" htmlFor="location">Location</label>
             <input
-              type="text"
-              value={form.venue}
-              onChange={(e) => setForm({ ...form, venue: e.target.value })}
+              id="location"
+              value={form.location ?? ''}
+              onChange={(e) => setForm({ ...form, location: e.target.value || null })}
               className="input-field"
-              placeholder="Wembley Stadium"
             />
           </div>
           <div>
-            <label className="label-field">Start Date & Time *</label>
+            <label className="label-field" htmlFor="start">Starts</label>
             <input
+              id="start"
               type="datetime-local"
-              required
-              value={form.start_date}
-              onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+              value={toLocalInput(form.start_date)}
+              onChange={(e) => setForm({ ...form, start_date: fromLocalInput(e.target.value) })}
               className="input-field"
             />
           </div>
           <div>
-            <label className="label-field">End Date & Time</label>
+            <label className="label-field" htmlFor="end">Ends</label>
             <input
+              id="end"
               type="datetime-local"
-              value={form.end_date}
-              onChange={(e) => setForm({ ...form, end_date: e.target.value })}
+              value={toLocalInput(form.end_date)}
+              onChange={(e) => setForm({ ...form, end_date: fromLocalInput(e.target.value) })}
               className="input-field"
             />
           </div>
           <div>
-            <label className="label-field">Capacity *</label>
+            <label className="label-field" htmlFor="capacity">Max participants</label>
             <input
+              id="capacity"
               type="number"
-              required
-              min="1"
-              value={form.capacity}
-              onChange={(e) => setForm({ ...form, capacity: parseInt(e.target.value) || 1 })}
+              min={0}
+              value={form.max_participants ?? ''}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  max_participants: e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
               className="input-field"
-            />
-          </div>
-          <div>
-            <label className="label-field">Organizer</label>
-            <input
-              type="text"
-              value={form.organizer}
-              onChange={(e) => setForm({ ...form, organizer: e.target.value })}
-              className="input-field"
-              placeholder="Youplay Sports"
             />
           </div>
         </div>
-        <div className="flex gap-3 justify-end pt-2">
-          <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
+
+        <div className="flex flex-col gap-3 pt-2">
+          <label className="flex items-center gap-3 text-sm text-dark-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.is_draft}
+              onChange={(e) => setForm({ ...form, is_draft: e.target.checked })}
+              className="w-4 h-4 accent-primary-500"
+            />
+            Draft — hidden from everyone except admins and its managers
+          </label>
+          <label className="flex items-center gap-3 text-sm text-dark-200 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.is_application_closed}
+              onChange={(e) => setForm({ ...form, is_application_closed: e.target.checked })}
+              className="w-4 h-4 accent-primary-500"
+            />
+            Applications closed
+          </label>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-4">
+          <button type="button" onClick={onClose} className="btn-secondary">
+            Cancel
+          </button>
           <button type="submit" disabled={saving} className="btn-primary disabled:opacity-50">
-            {saving ? 'Saving...' : event ? 'Save Changes' : 'Create Event'}
+            {saving ? 'Saving...' : 'Save changes'}
           </button>
         </div>
       </form>

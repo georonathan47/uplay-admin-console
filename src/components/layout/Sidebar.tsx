@@ -14,12 +14,12 @@ import { useAuth } from '@/lib/auth';
 
 export type PageId =
   | 'overview'
-  | 'athletes'
+  | 'people'
   | 'connections'
   | 'events'
-  | 'tickets'
-  | 'notifications'
-  | 'settings';
+  | 'support'
+  | 'activity'
+  | 'account';
 
 interface NavItem {
   id: PageId;
@@ -30,12 +30,12 @@ interface NavItem {
 
 export const navItems: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, description: 'Dashboard summary' },
-  { id: 'athletes', label: 'Athletes', icon: Users, description: 'Manage athletes' },
+  { id: 'people', label: 'People', icon: Users, description: 'Platform members' },
   { id: 'connections', label: 'Connections', icon: Network, description: 'Network overview' },
   { id: 'events', label: 'Events', icon: CalendarDays, description: 'Sporting events' },
-  { id: 'tickets', label: 'Tickets', icon: Ticket, description: 'Support tickets' },
-  { id: 'notifications', label: 'Notifications', icon: Bell, description: 'Send & manage' },
-  { id: 'settings', label: 'Settings', icon: Settings, description: 'System config' },
+  { id: 'support', label: 'Support', icon: Ticket, description: 'Support requests' },
+  { id: 'activity', label: 'Activity', icon: Bell, description: 'Platform activity' },
+  { id: 'account', label: 'Account', icon: Settings, description: 'Your admin profile' },
 ];
 
 interface SidebarProps {
@@ -68,8 +68,8 @@ export function Sidebar({ active, onNavigate, open, onClose }: SidebarProps) {
               <Activity size={22} className="text-white" />
             </div>
             <div>
-              <p className="font-display font-bold text-white text-lg leading-none">Youplay</p>
-              <p className="text-xs text-dark-400 mt-0.5">Management</p>
+              <p className="font-display font-bold text-white text-lg leading-none">UPlay</p>
+              <p className="text-xs text-dark-400 mt-0.5">Admin Console</p>
             </div>
           </div>
           <button onClick={onClose} className="lg:hidden text-dark-400 hover:text-white">

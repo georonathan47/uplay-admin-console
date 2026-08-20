@@ -1,154 +1,255 @@
-export type AthleteStatus = 'active' | 'inactive' | 'suspended' | 'pending';
+/**
+ * Types for the UPlay Dev database (project dawzzrzxndemtvsctoji).
+ *
+ * Two layers live here:
+ *   - `*Row` types mirror the live Postgres columns exactly. Change them only to
+ *     match a migration.
+ *   - The view models below are what pages render. The mapping between the two
+ *     lives in `src/lib/api/*` so no component has to know a column name.
+ */
 
-export interface Athlete {
+// ─────────────────────────────── database rows ───────────────────────────────
+
+export type RatingTier =
+  | 'emerging_prospect'
+  | 'developing_talent'
+  | 'high_potential'
+  | 'elite_talent';
+
+export interface ProfileRow {
+  id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_url: string | null;
+  user_type: string | null;
+  sport: string | null;
+  gender: string | null;
+  is_profile_complete: boolean | null;
+  is_verified: boolean | null;
+  created_at: string | null;
+  updated_at: string | null;
+  phone: string | null;
+  country_code: string | null;
+  date_of_birth: string | null;
+  address: string | null;
+  about_me: string | null;
+  twitter_handle: string | null;
+  instagram_handle: string | null;
+  current_profile_step: number | null;
+  rating_score: number | null;
+  rating_tier: RatingTier | null;
+  rating_calculated_at: string | null;
+  is_uplay_admin: boolean | null;
+  suspended_at: string | null;
+}
+
+export interface EventRow {
+  id: string;
+  title: string;
+  description: string | null;
+  image_url: string | null;
+  location: string | null;
+  country_code: string | null;
+  event_date: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  date_range_display: string | null;
+  event_type: string | null;
+  target_audience: string | null;
+  age_range: string | null;
+  eligibility_criteria: string | null;
+  registration_fee: number | null;
+  payment_deadline: string | null;
+  max_participants: number | null;
+  is_application_closed: boolean | null;
+  is_draft: boolean | null;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  video_url: string | null;
+  place_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  sport: string | null;
+}
+
+/** The live check constraint allows exactly these three — there is no 'blocked'. */
+export type ConnectionStatus = 'pending' | 'accepted' | 'declined';
+
+export interface ConnectionRow {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: ConnectionStatus;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export type ActivityType =
+  | 'profile_view'
+  | 'event_invite'
+  | 'connection_request'
+  | 'connection_accept'
+  | 'stat_verified'
+  | 'message'
+  | 'general'
+  | 'post_created'
+  | 'post_liked'
+  | 'post_commented'
+  | 'event_created'
+  | 'org_post_created'
+  | 'org_post_liked'
+  | 'org_post_commented';
+
+export interface NotificationRow {
+  id: string;
+  user_id: string;
+  type: ActivityType;
+  actor_name: string | null;
+  actor_avatar_url: string | null;
+  related_entity_name: string | null;
+  related_entity_id: string | null;
+  message: string | null;
+  is_read: boolean | null;
+  created_at: string | null;
+}
+
+/** Note: 'new', not 'open' — the check constraint rejects 'open'. */
+export type SupportStatus = 'new' | 'in_progress' | 'resolved' | 'closed';
+
+export type SupportIssueType =
+  | 'account_issues'
+  | 'payment_problems'
+  | 'technical_support'
+  | 'feature_request'
+  | 'other';
+
+export interface SupportRequestRow {
+  id: string;
+  user_id: string;
+  email: string;
+  issue_type: SupportIssueType;
+  description: string;
+  status: SupportStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─────────────────────────────── view models ─────────────────────────────────
+
+/** Minimal person shape for avatars and names embedded in other views. */
+export interface PersonRef {
   id: string;
   name: string;
-  email: string | null;
+  avatarUrl: string | null;
+  userType: string | null;
+  sport: string | null;
+}
+
+/**
+ * Derived, not stored. `profiles` has no status column — this is computed from
+ * `suspended_at` and `is_profile_complete` in `src/lib/api/profiles.ts`.
+ */
+export type PersonStatus = 'active' | 'pending' | 'suspended';
+
+export interface Person extends PersonRef {
+  email: string;
   phone: string | null;
-  sport: string;
-  position: string | null;
-  country: string | null;
-  avatar_url: string | null;
-  status: AthleteStatus;
-  rating: number;
-  connections_count: number;
-  events_count: number;
+  countryCode: string | null;
   bio: string | null;
-  joined_at: string;
-  created_at: string;
-  updated_at: string;
+  status: PersonStatus;
+  isVerified: boolean;
+  isProfileComplete: boolean;
+  isAdmin: boolean;
+  ratingScore: number | null;
+  ratingTier: RatingTier | null;
+  joinedAt: string | null;
+  suspendedAt: string | null;
 }
 
-export type AthleteInsert = Omit<Athlete, 'id' | 'created_at' | 'updated_at' | 'joined_at' | 'connections_count' | 'events_count'> & {
-  joined_at?: string;
-  connections_count?: number;
-  events_count?: number;
-};
+/** Derived from `is_draft` and the event's date window. */
+export type EventStatus = 'draft' | 'upcoming' | 'ongoing' | 'completed';
 
-export type AthleteUpdate = Partial<AthleteInsert>;
-
-export type ConnectionType = 'friend' | 'teammate' | 'coach' | 'scout' | 'mentor' | 'rival';
-export type ConnectionStatus = 'pending' | 'accepted' | 'blocked' | 'declined';
-
-export interface Connection {
-  id: string;
-  athlete_id_a: string;
-  athlete_id_b: string;
-  connection_type: ConnectionType;
-  status: ConnectionStatus;
-  created_at: string;
-  athlete_a?: Athlete;
-  athlete_b?: Athlete;
-}
-
-export type EventStatus = 'upcoming' | 'ongoing' | 'completed' | 'cancelled';
-
-export interface Event {
+export interface EventItem {
   id: string;
   title: string;
   description: string | null;
-  sport: string;
+  sport: string | null;
   location: string | null;
-  venue: string | null;
-  start_date: string;
-  end_date: string | null;
-  capacity: number;
-  registered_count: number;
+  imageUrl: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  capacity: number | null;
+  registrationFee: number | null;
+  eventType: string | null;
+  targetAudience: string | null;
+  ageRange: string | null;
   status: EventStatus;
-  image_url: string | null;
-  organizer: string | null;
-  created_at: string;
-  updated_at: string;
+  isDraft: boolean;
+  isApplicationClosed: boolean;
+  organizer: PersonRef | null;
+  createdAt: string | null;
 }
 
-export type EventInsert = Omit<Event, 'id' | 'created_at' | 'updated_at' | 'registered_count'> & {
-  registered_count?: number;
-};
-
-export type EventUpdate = Partial<EventInsert>;
-
-export type RegistrationStatus = 'registered' | 'confirmed' | 'attended' | 'cancelled';
-
-export interface EventRegistration {
-  id: string;
-  event_id: string;
-  athlete_id: string;
-  status: RegistrationStatus;
-  registered_at: string;
-  athlete?: Athlete;
-  event?: Event;
-}
-
-export type TicketCategory = 'general' | 'technical' | 'billing' | 'account' | 'event' | 'feature_request';
-export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
-
-export interface Ticket {
-  id: string;
-  subject: string;
-  description: string | null;
-  category: TicketCategory;
-  priority: TicketPriority;
-  status: TicketStatus;
-  submitted_by: string | null;
-  submitter_email: string | null;
-  assigned_to: string | null;
-  tags: string[];
-  created_at: string;
-  updated_at: string;
-  resolved_at: string | null;
-}
-
-export type TicketInsert = Omit<Ticket, 'id' | 'created_at' | 'updated_at' | 'resolved_at'> & {
-  resolved_at?: string | null;
-};
-
-export type TicketUpdate = Partial<TicketInsert>;
-
-export interface TicketMessage {
-  id: string;
-  ticket_id: string;
-  author: string;
-  message: string;
-  is_internal: boolean;
-  created_at: string;
-}
-
-export type NotificationType = 'info' | 'success' | 'warning' | 'error' | 'event' | 'system';
-export type NotificationChannel = 'in_app' | 'push' | 'email' | 'sms';
-export type NotificationAudience = 'all' | 'athletes' | 'coaches' | 'specific';
-
-export interface Notification {
-  id: string;
+/** Fields the admin console is allowed to write back to `events`. */
+export interface EventEditable {
   title: string;
-  message: string;
-  type: NotificationType;
-  channel: NotificationChannel;
-  target_audience: NotificationAudience;
-  target_id: string | null;
-  is_read: boolean;
-  is_published: boolean;
-  scheduled_for: string | null;
-  sent_count: number;
-  created_at: string;
-  updated_at: string;
+  description: string | null;
+  sport: string | null;
+  location: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  max_participants: number | null;
+  is_draft: boolean;
+  is_application_closed: boolean;
 }
 
-export type NotificationInsert = Omit<Notification, 'id' | 'created_at' | 'updated_at' | 'is_read' | 'sent_count'> & {
-  is_read?: boolean;
-  sent_count?: number;
-};
-
-export type NotificationUpdate = Partial<NotificationInsert>;
-
-export type SettingCategory = 'general' | 'branding' | 'notifications' | 'events' | 'security' | 'integrations';
-
-export interface Setting {
+export interface ConnectionItem {
   id: string;
-  key: string;
-  value: Record<string, unknown>;
-  category: SettingCategory;
-  label: string | null;
-  description: string | null;
-  updated_at: string;
+  status: ConnectionStatus;
+  createdAt: string | null;
+  requester: PersonRef | null;
+  addressee: PersonRef | null;
+}
+
+export interface SupportRequestItem {
+  id: string;
+  email: string;
+  issueType: SupportIssueType;
+  description: string;
+  status: SupportStatus;
+  createdAt: string;
+  updatedAt: string;
+  submitter: PersonRef | null;
+}
+
+export interface ActivityItem {
+  id: string;
+  type: ActivityType;
+  actorName: string | null;
+  actorAvatarUrl: string | null;
+  relatedEntityName: string | null;
+  message: string | null;
+  isRead: boolean;
+  createdAt: string | null;
+  recipient: PersonRef | null;
+}
+
+export interface OverviewStats {
+  totalPeople: number;
+  athletes: number;
+  verifiedPeople: number;
+  acceptedConnections: number;
+  upcomingEvents: number;
+  openSupportRequests: number;
+  unreadActivity: number;
+}
+
+export interface OverviewData {
+  stats: OverviewStats;
+  recentPeople: Person[];
+  upcomingEvents: EventItem[];
+  recentRequests: SupportRequestItem[];
+  sportDistribution: { sport: string; count: number }[];
 }
